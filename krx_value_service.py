@@ -70,6 +70,7 @@ def get_tatsuro_small_mid_value_top10(
     date: Optional[str] = None,
     cap_min: int = 500_000_000_000,
     cap_max: int = 1_000_000_000_000,
+    top_n: int = 10,
 ):
     normalized_market = normalize_market(market)
     base_date = normalize_date(date)
@@ -91,7 +92,7 @@ def get_tatsuro_small_mid_value_top10(
     result_df = add_ticker_names(result_df)
     result_df["TAT"] = result_df.apply(get_tatsuro_score, axis=1)
 
-    result_df = result_df.sort_values("TAT", ascending=False).head(10)
+    result_df = result_df.sort_values("TAT", ascending=False).head(top_n)
 
     display_df = result_df[["종목명", "시가총액", "PER", "PBR", "DIV", "TAT"]].copy()
     display_df["시가총액(조)"] = (display_df["시가총액"] / 1_000_000_000_000).round(3)

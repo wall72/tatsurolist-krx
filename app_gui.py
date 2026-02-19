@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import threading
 import tkinter as tk
@@ -7,6 +7,9 @@ from tkinter import messagebox, ttk
 from krx_value_service import get_tatsuro_small_mid_value_top10
 
 COLUMNS = ("종목명", "시가총액(조)", "PER", "PBR", "DIV", "TAT")
+DEFAULT_CAP_MIN_EOK = 5000
+DEFAULT_CAP_MAX_EOK = 10000
+DEFAULT_TOP_N = 10
 
 
 class KrxValueApp(tk.Tk):
@@ -19,6 +22,9 @@ class KrxValueApp(tk.Tk):
         self.status_var = tk.StringVar(value="시장/날짜를 선택하고 조회 버튼을 누르세요.")
         self.market_var = tk.StringVar(value="KOSPI")
         self.date_var = tk.StringVar(value="")
+        self.cap_min_var = tk.StringVar(value=str(DEFAULT_CAP_MIN_EOK))
+        self.cap_max_var = tk.StringVar(value=str(DEFAULT_CAP_MAX_EOK))
+        self.top_n_var = tk.StringVar(value=str(DEFAULT_TOP_N))
 
         self._build_ui()
 
@@ -54,6 +60,21 @@ class KrxValueApp(tk.Tk):
         self.fetch_button = ttk.Button(top_frame, text="목록 조회", command=self.fetch_data)
         self.fetch_button.grid(row=1, column=5, sticky="e", padx=(12, 0))
 
+        ttk.Label(top_frame, text="시총 하한(억원)").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        self.cap_min_entry = ttk.Entry(top_frame, textvariable=self.cap_min_var, width=12)
+        self.cap_min_entry.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(10, 0))
+
+        ttk.Label(top_frame, text="시총 상한(억원)").grid(row=2, column=2, sticky="w", pady=(10, 0))
+        self.cap_max_entry = ttk.Entry(top_frame, textvariable=self.cap_max_var, width=12)
+        self.cap_max_entry.grid(row=2, column=3, sticky="w", padx=(0, 8), pady=(10, 0))
+
+        ttk.Label(top_frame, text="Top N").grid(row=2, column=4, sticky="w", pady=(10, 0))
+        self.top_n_entry = ttk.Entry(top_frame, textvariable=self.top_n_var, width=8)
+        self.top_n_entry.grid(row=2, column=4, sticky="e", padx=(0, 100), pady=(10, 0))
+
+        self.reset_button = ttk.Button(top_frame, text="기본값 복원", command=self.reset_defaults)
+        self.reset_button.grid(row=2, column=5, sticky="e", padx=(12, 0), pady=(10, 0))
+
         top_frame.columnconfigure(4, weight=1)
 
         table_frame = ttk.Frame(self, padding=(12, 0, 12, 8))
@@ -75,16 +96,50 @@ class KrxValueApp(tk.Tk):
         status = ttk.Label(self, textvariable=self.status_var, padding=(12, 6, 12, 12))
         status.pack(fill="x")
 
+    def reset_defaults(self):
+        self.cap_min_var.set(str(DEFAULT_CAP_MIN_EOK))
+        self.cap_max_var.set(str(DEFAULT_CAP_MAX_EOK))
+        self.top_n_var.set(str(DEFAULT_TOP_N))
+        self.status_var.set("기본 파라미터로 복원했습니다.")
+
+    def _validate_inputs(self):
+        try:
+            cap_min_eok = int(self.cap_min_var.get().strip())
+            cap_max_eok = int(self.cap_max_var.get().strip())
+            top_n = int(self.top_n_var.get().strip())
+        except ValueError as exc:
+            raise ValueError("시총 하한/상한과 Top N은 숫자로 입력해야 합니다.") from exc
+
+        if cap_min_eok < 0 or cap_max_eok < 0:
+            raise ValueError("시총 하한/상한은 0 이상이어야 합니다.")
+        if cap_min_eok > cap_max_eok:
+            raise ValueError("시총 하한은 상한보다 클 수 없습니다.")
+        if not 1 <= top_n <= 100:
+            raise ValueError("Top N은 1~100 범위로 입력해 주세요.")
+
+        return cap_min_eok * 100_000_000, cap_max_eok * 100_000_000, top_n
+
     def fetch_data(self):
+        try:
+            self._query_params = self._validate_inputs()
+        except ValueError as exc:
+            messagebox.showwarning("입력값 확인", str(exc))
+            return
+
         self.fetch_button.config(state="disabled")
+        self.reset_button.config(state="disabled")
         self.status_var.set("데이터 조회 중...")
         threading.Thread(target=self._fetch_data_worker, daemon=True).start()
 
     def _fetch_data_worker(self):
         try:
+            cap_min, cap_max, top_n = self._query_params
             df, used_date = get_tatsuro_small_mid_value_top10(
                 market=self.market_var.get(),
                 date=self.date_var.get() or None,
+                cap_min=cap_min,
+                cap_max=cap_max,
+                top_n=top_n,
             )
             self.after(0, self._render_table, df, used_date)
         except Exception as exc:
@@ -96,6 +151,7 @@ class KrxValueApp(tk.Tk):
         if df.empty:
             self.status_var.set(f"조건에 맞는 데이터가 없습니다. (기준일: {used_date})")
             self.fetch_button.config(state="normal")
+            self.reset_button.config(state="normal")
             return
 
         for _, row in df.iterrows():
@@ -116,10 +172,12 @@ class KrxValueApp(tk.Tk):
             f"조회 완료: {len(df)}개 종목 | 시장: {self.market_var.get()} | 기준일: {used_date}"
         )
         self.fetch_button.config(state="normal")
+        self.reset_button.config(state="normal")
 
     def _show_error(self, message: str):
         self.status_var.set("조회 실패")
         self.fetch_button.config(state="normal")
+        self.reset_button.config(state="normal")
         messagebox.showerror("오류", f"데이터 조회 중 오류가 발생했습니다.\n\n{message}")
 
 
