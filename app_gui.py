@@ -2,11 +2,23 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
-from tkinter import messagebox, ttk
+from datetime import datetime
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
 
 from krx_value_service import get_tatsuro_small_mid_value_top10
 
-COLUMNS = ("종목명", "시가총액(조)", "PER", "PBR", "DIV", "TAT")
+COLUMNS = (
+    "종목명",
+    "시가총액(조)",
+    "PER",
+    "PBR",
+    "DIV",
+    "PER 기여",
+    "PBR 기여",
+    "DIV 기여",
+    "TAT",
+)
 DEFAULT_CAP_MIN_EOK = 5000
 DEFAULT_CAP_MAX_EOK = 10000
 DEFAULT_TOP_N = 10
@@ -16,8 +28,8 @@ class KrxValueApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Tatsuro KRX 중소형 가치주")
-        self.geometry("920x560")
-        self.minsize(820, 460)
+        self.geometry("1160x560")
+        self.minsize(980, 460)
 
         self.status_var = tk.StringVar(value="시장/날짜를 선택하고 조회 버튼을 누르세요.")
         self.market_var = tk.StringVar(value="KOSPI")
@@ -25,7 +37,10 @@ class KrxValueApp(tk.Tk):
         self.cap_min_var = tk.StringVar(value=str(DEFAULT_CAP_MIN_EOK))
         self.cap_max_var = tk.StringVar(value=str(DEFAULT_CAP_MAX_EOK))
         self.top_n_var = tk.StringVar(value=str(DEFAULT_TOP_N))
+        self.result_header_var = tk.StringVar(value="결과 헤더: 시장/기준일 정보가 여기에 표시됩니다.")
 
+        self._latest_result_df = None
+        self._last_used_date = ""
         self._build_ui()
 
     def _build_ui(self):
@@ -37,7 +52,7 @@ class KrxValueApp(tk.Tk):
             text="Tatsuro 제안식 KRX 중소형 가치주 (PER/PBR/DIV 기반)",
             font=("Malgun Gothic", 12, "bold"),
         )
-        title.grid(row=0, column=0, columnspan=6, sticky="w", pady=(0, 10))
+        title.grid(row=0, column=0, columnspan=7, sticky="w", pady=(0, 10))
 
         ttk.Label(top_frame, text="시장").grid(row=1, column=0, sticky="w", padx=(0, 6))
         self.market_combo = ttk.Combobox(
@@ -60,6 +75,9 @@ class KrxValueApp(tk.Tk):
         self.fetch_button = ttk.Button(top_frame, text="목록 조회", command=self.fetch_data)
         self.fetch_button.grid(row=1, column=5, sticky="e", padx=(12, 0))
 
+        self.save_button = ttk.Button(top_frame, text="CSV 저장", command=self.save_csv, state="disabled")
+        self.save_button.grid(row=1, column=6, sticky="e", padx=(8, 0))
+
         ttk.Label(top_frame, text="시총 하한(억원)").grid(row=2, column=0, sticky="w", pady=(10, 0))
         self.cap_min_entry = ttk.Entry(top_frame, textvariable=self.cap_min_var, width=12)
         self.cap_min_entry.grid(row=2, column=1, sticky="w", padx=(0, 12), pady=(10, 0))
@@ -77,6 +95,9 @@ class KrxValueApp(tk.Tk):
 
         top_frame.columnconfigure(4, weight=1)
 
+        header_label = ttk.Label(self, textvariable=self.result_header_var, padding=(12, 0, 12, 6))
+        header_label.pack(fill="x")
+
         table_frame = ttk.Frame(self, padding=(12, 0, 12, 8))
         table_frame.pack(fill="both", expand=True)
 
@@ -84,7 +105,7 @@ class KrxValueApp(tk.Tk):
         for col in COLUMNS:
             self.tree.heading(col, text=col)
             anchor = "w" if col == "종목명" else "e"
-            width = 220 if col == "종목명" else 120
+            width = 220 if col == "종목명" else 95
             self.tree.column(col, anchor=anchor, width=width, stretch=True)
 
         y_scroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
@@ -128,30 +149,37 @@ class KrxValueApp(tk.Tk):
 
         self.fetch_button.config(state="disabled")
         self.reset_button.config(state="disabled")
+        self.save_button.config(state="disabled")
         self.status_var.set("데이터 조회 중...")
         threading.Thread(target=self._fetch_data_worker, daemon=True).start()
 
     def _fetch_data_worker(self):
         try:
             cap_min, cap_max, top_n = self._query_params
-            df, used_date = get_tatsuro_small_mid_value_top10(
+            df, used_date, stats = get_tatsuro_small_mid_value_top10(
                 market=self.market_var.get(),
                 date=self.date_var.get() or None,
                 cap_min=cap_min,
                 cap_max=cap_max,
                 top_n=top_n,
             )
-            self.after(0, self._render_table, df, used_date)
+            self.after(0, self._render_table, df, used_date, stats)
         except Exception as exc:
             self.after(0, self._show_error, str(exc))
 
-    def _render_table(self, df, used_date: str):
+    def _render_table(self, df, used_date: str, stats: dict[str, int]):
         self.tree.delete(*self.tree.get_children())
+        self._latest_result_df = df.copy()
+        self._last_used_date = used_date
+        self.result_header_var.set(f"결과 헤더 | 시장: {self.market_var.get()} | 기준일: {used_date}")
 
         if df.empty:
-            self.status_var.set(f"조건에 맞는 데이터가 없습니다. (기준일: {used_date})")
+            self.status_var.set(
+                f"조건 통과 종목이 없습니다 | 전체: {stats['total']} | 조건통과: {stats['filtered']} | 최종: 0"
+            )
             self.fetch_button.config(state="normal")
             self.reset_button.config(state="normal")
+            self.save_button.config(state="disabled")
             return
 
         for _, row in df.iterrows():
@@ -164,20 +192,52 @@ class KrxValueApp(tk.Tk):
                     f"{row['PER']:.2f}" if row["PER"] == row["PER"] else "-",
                     f"{row['PBR']:.2f}" if row["PBR"] == row["PBR"] else "-",
                     f"{row['DIV']:.2f}" if row["DIV"] == row["DIV"] else "-",
+                    f"{row['PER 기여']:.4f}",
+                    f"{row['PBR 기여']:.4f}",
+                    f"{row['DIV 기여']:.4f}",
                     f"{row['TAT']:.4f}",
                 ),
             )
 
         self.status_var.set(
-            f"조회 완료: {len(df)}개 종목 | 시장: {self.market_var.get()} | 기준일: {used_date}"
+            f"조회 완료 | 전체: {stats['total']} | 조건통과: {stats['filtered']} | 최종: {stats['final']}"
         )
         self.fetch_button.config(state="normal")
         self.reset_button.config(state="normal")
+        self.save_button.config(state="normal")
+
+    def save_csv(self):
+        if self._latest_result_df is None or self._latest_result_df.empty:
+            messagebox.showwarning("저장 불가", "저장할 결과가 없습니다. 먼저 목록을 조회해 주세요.")
+            return
+
+        market = self.market_var.get().strip().upper()
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"{market}_{self._last_used_date}_{timestamp}.csv"
+
+        file_path = filedialog.asksaveasfilename(
+            title="결과 CSV 저장",
+            defaultextension=".csv",
+            initialfile=default_name,
+            filetypes=[("CSV 파일", "*.csv"), ("모든 파일", "*.*")],
+        )
+        if not file_path:
+            self.status_var.set("CSV 저장이 취소되었습니다.")
+            return
+
+        try:
+            self._latest_result_df.to_csv(file_path, index=False, encoding="utf-8-sig")
+            self.status_var.set(f"CSV 저장 완료: {Path(file_path).name}")
+            messagebox.showinfo("저장 완료", f"CSV 파일을 저장했습니다.\n\n{file_path}")
+        except Exception as exc:
+            self.status_var.set("CSV 저장 실패")
+            messagebox.showerror("저장 실패", f"CSV 저장 중 오류가 발생했습니다.\n\n{exc}")
 
     def _show_error(self, message: str):
         self.status_var.set("조회 실패")
         self.fetch_button.config(state="normal")
         self.reset_button.config(state="normal")
+        self.save_button.config(state="disabled")
         messagebox.showerror("오류", f"데이터 조회 중 오류가 발생했습니다.\n\n{message}")
 
 
