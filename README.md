@@ -99,3 +99,8 @@ pyinstaller --noconfirm --clean --onefile --windowed --name tatsurolist-krx --ic
 - 네트워크 상태 및 KRX 데이터 제공 상태에 따라 조회 시간이 달라질 수 있습니다.
 - 입력한 날짜가 휴장일이면 가장 가까운 이전 영업일 데이터를 사용합니다.
 - 백신/보안 설정에 따라 처음 실행 시 SmartScreen 경고가 표시될 수 있습니다.
+
+
+## 로드맵
+
+- 실행 가능한 상세 체크리스트는 `WORKLIST.md`를 참고하세요.
