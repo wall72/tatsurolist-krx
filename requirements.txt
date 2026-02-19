@@ -1,0 +1,2 @@
+﻿pykrx
+pandas
