@@ -7,6 +7,13 @@ KRX 데이터(`pykrx`)를 사용해 Tatsuro 방식의 중소형 가치주를 선
 - 시장 선택: `KOSPI` 또는 `KOSDAQ`
 - 기준일 조회: 특정 날짜 기준 산출 (`YYYYMMDD` 또는 `YYYY-MM-DD`)
 - 기준일 미입력 시: Today 기준 조회
+- 파라미터 입력
+  - 시가총액 하한/상한 입력 (`cap_min`, `cap_max`, 기본 `5,000억 ~ 1조`)
+  - Top N 입력 (기본 `10`, 허용 범위 `1~100`)
+  - `기본값 복원` 버튼으로 파라미터 초기화
+- 입력값 유효성 검사
+  - 시총/Top N 숫자 여부 확인
+  - 시총 하한/상한 범위 검증 (하한 ≤ 상한, 0 이상)
 - 휴장일 자동 처리: 최근 영업일로 최대 14일 백트래킹
 - 선별 조건
   - `PER > 0`
@@ -14,6 +21,15 @@ KRX 데이터(`pykrx`)를 사용해 Tatsuro 방식의 중소형 가치주를 선
   - 시가총액 `5,000억 ~ 1조`
 - 점수 산식 (TAT)
   - `(1 / PER) + (1 / PBR) + (DIV / 100)`
+- 결과 해석 컬럼
+  - `PER 기여`, `PBR 기여`, `DIV 기여`를 별도 표시
+- 조회 통계
+  - 하단 상태바에 `전체/조건통과/최종` 건수 표시
+- 결과 헤더
+  - 현재 표시 중인 결과의 `시장`/`기준일`을 고정 표시
+- CSV 저장
+  - `CSV 저장` 버튼으로 결과 내보내기
+  - 기본 파일명: `market_date_timestamp.csv`
 
 ## 프로젝트 구조
 
@@ -47,8 +63,13 @@ python app_gui.py
    - 예: `20260219` 또는 `2026-02-19`
    - 비워두면 Today
 3. `목록 조회` 클릭
+4. 필요 시 시가총액 하한/상한, Top N을 조정
+5. `기본값 복원`으로 파라미터를 기본값으로 되돌릴 수 있음
 
 조회 완료 후 하단 상태바에 실제 사용된 기준일이 표시됩니다.
+상태바에는 필터링 통계(전체/조건통과/최종)도 함께 표시됩니다.
+
+`CSV 저장` 버튼으로 현재 조회 결과를 저장할 수 있으며, 저장 성공/실패 메시지가 표시됩니다.
 
 ## 서비스 함수 직접 사용
 
@@ -56,12 +77,13 @@ python app_gui.py
 from krx_value_service import get_tatsuro_small_mid_value_top10
 
 # KOSDAQ, 특정 날짜 기준
-result_df, used_date = get_tatsuro_small_mid_value_top10(
+result_df, used_date, stats = get_tatsuro_small_mid_value_top10(
     market="KOSDAQ",
     date="2026-02-19",
 )
 
 print(used_date)
+print(stats)
 print(result_df)
 ```
 

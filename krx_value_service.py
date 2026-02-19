@@ -65,6 +65,13 @@ def get_tatsuro_score(row: pd.Series) -> float:
     return score
 
 
+def get_tatsuro_contributions(row: pd.Series) -> tuple[float, float, float]:
+    per_contrib = 1 / row["PER"] if pd.notna(row["PER"]) and row["PER"] > 0 else 0.0
+    pbr_contrib = 1 / row["PBR"] if pd.notna(row["PBR"]) and row["PBR"] > 0 else 0.0
+    div_contrib = row["DIV"] / 100 if pd.notna(row["DIV"]) else 0.0
+    return per_contrib, pbr_contrib, div_contrib
+
+
 def get_tatsuro_small_mid_value_top10(
     market: str = "KOSPI",
     date: Optional[str] = None,
@@ -81,6 +88,7 @@ def get_tatsuro_small_mid_value_top10(
     )
 
     result_df = market_cap_df.join(fundamental_df, how="inner")
+    total_count = len(result_df)
 
     result_df = result_df[
         (result_df["PER"] > 0)
@@ -88,15 +96,30 @@ def get_tatsuro_small_mid_value_top10(
         & (result_df["시가총액"] >= cap_min)
         & (result_df["시가총액"] <= cap_max)
     ]
+    filtered_count = len(result_df)
 
     result_df = add_ticker_names(result_df)
+    result_df[["PER 기여", "PBR 기여", "DIV 기여"]] = result_df.apply(
+        lambda row: pd.Series(get_tatsuro_contributions(row)),
+        axis=1,
+    )
     result_df["TAT"] = result_df.apply(get_tatsuro_score, axis=1)
 
     result_df = result_df.sort_values("TAT", ascending=False).head(top_n)
 
-    display_df = result_df[["종목명", "시가총액", "PER", "PBR", "DIV", "TAT"]].copy()
+    display_df = result_df[
+        ["종목명", "시가총액", "PER", "PBR", "DIV", "PER 기여", "PBR 기여", "DIV 기여", "TAT"]
+    ].copy()
     display_df["시가총액(조)"] = (display_df["시가총액"] / 1_000_000_000_000).round(3)
     display_df = display_df.drop(columns=["시가총액"])
     display_df["TAT"] = display_df["TAT"].round(4)
+    for col in ("PER 기여", "PBR 기여", "DIV 기여"):
+        display_df[col] = display_df[col].round(4)
 
-    return display_df, used_date
+    stats = {
+        "total": total_count,
+        "filtered": filtered_count,
+        "final": len(display_df),
+    }
+
+    return display_df, used_date, stats
