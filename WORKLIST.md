@@ -33,10 +33,10 @@
 - [ ] 대기 시간 표시(로딩 시작~종료)
 
 ### F. 테스트 도입
-- [ ] `normalize_market` 테스트
-- [ ] `normalize_date` 테스트
-- [ ] `get_tatsuro_score` 테스트
-- [ ] 필터 조건 테스트 (PER/PBR/시총)
+- [x] `normalize_market` 테스트
+- [x] `normalize_date` 테스트
+- [x] `get_tatsuro_score` 테스트
+- [x] 필터 조건 테스트 (PER/PBR/시총)
 
 ## 3) 장기 (v0.3+)
 
