@@ -99,11 +99,10 @@ def get_tatsuro_small_mid_value_top10(
     filtered_count = len(result_df)
 
     result_df = add_ticker_names(result_df)
-    result_df[["PER 기여", "PBR 기여", "DIV 기여"]] = result_df.apply(
-        lambda row: pd.Series(get_tatsuro_contributions(row)),
-        axis=1,
-    )
-    result_df["TAT"] = result_df.apply(get_tatsuro_score, axis=1)
+    result_df["PER 기여"] = (1 / result_df["PER"]).where(result_df["PER"] > 0, 0.0)
+    result_df["PBR 기여"] = (1 / result_df["PBR"]).where(result_df["PBR"] > 0, 0.0)
+    result_df["DIV 기여"] = (result_df["DIV"] / 100).where(result_df["DIV"].notna(), 0.0)
+    result_df["TAT"] = result_df["PER 기여"] + result_df["PBR 기여"] + result_df["DIV 기여"]
 
     result_df = result_df.sort_values("TAT", ascending=False).head(top_n)
 
