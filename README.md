@@ -87,6 +87,22 @@ print(stats)
 print(result_df)
 ```
 
+
+## 테스트
+
+아래 명령으로 핵심 서비스 로직 테스트를 실행할 수 있습니다.
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m unittest -v
+```
+
+현재 테스트 범위:
+- `normalize_market`
+- `normalize_date`
+- `get_tatsuro_score`
+- 필터 조건(PER/PBR/시가총액)
+
 ## PyInstaller 배포 (Windows)
 
 ### 1) PyInstaller 설치
