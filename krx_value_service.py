@@ -7,6 +7,10 @@ import pandas as pd
 from pykrx import stock
 
 VALID_MARKETS = {"KOSPI", "KOSDAQ"}
+VALID_DIV_POLICIES = {"zero", "exclude"}
+
+_TICKER_NAME_CACHE: dict[str, str] = {}
+_QUERY_CACHE: dict[tuple, tuple[pd.DataFrame, str, dict[str, int], list[str]]] = {}
 
 
 def normalize_market(market: str) -> str:
@@ -30,15 +34,31 @@ def normalize_date(date: Optional[str]) -> datetime:
     raise ValueError("date must be YYYYMMDD or YYYY-MM-DD")
 
 
-def get_market_data_with_fallback(market: str, base_date: datetime, max_backtrack_days: int = 14):
+def get_market_data_with_fallback(
+    market: str,
+    base_date: datetime,
+    max_backtrack_days: int = 14,
+    backtrack_logs: Optional[list[str]] = None,
+):
     for offset in range(max_backtrack_days + 1):
         target_date = (base_date - timedelta(days=offset)).strftime("%Y%m%d")
         try:
             market_cap_df = stock.get_market_cap_by_ticker(target_date, market=market)
             fundamental_df = stock.get_market_fundamental_by_ticker(target_date, market=market)
             if not market_cap_df.empty and not fundamental_df.empty:
+                if backtrack_logs is not None:
+                    if offset == 0:
+                        backtrack_logs.append(f"{target_date}: 입력 기준일 데이터 사용")
+                    else:
+                        backtrack_logs.append(
+                            f"{target_date}: {offset}일 백트래킹 후 사용"
+                        )
                 return market_cap_df, fundamental_df, target_date
+            if backtrack_logs is not None:
+                backtrack_logs.append(f"{target_date}: 데이터 없음(빈 결과)")
         except Exception:
+            if backtrack_logs is not None:
+                backtrack_logs.append(f"{target_date}: 조회 실패(예외 발생)")
             continue
 
     raise RuntimeError(f"No market data available for {market} in last {max_backtrack_days + 1} days")
@@ -46,7 +66,12 @@ def get_market_data_with_fallback(market: str, base_date: datetime, max_backtrac
 
 def add_ticker_names(df: pd.DataFrame) -> pd.DataFrame:
     result = df.copy()
-    result["종목명"] = [stock.get_market_ticker_name(ticker) for ticker in result.index]
+    names: list[str] = []
+    for ticker in result.index:
+        if ticker not in _TICKER_NAME_CACHE:
+            _TICKER_NAME_CACHE[ticker] = stock.get_market_ticker_name(ticker)
+        names.append(_TICKER_NAME_CACHE[ticker])
+    result["종목명"] = names
     return result
 
 
@@ -78,13 +103,38 @@ def get_tatsuro_small_mid_value_top10(
     cap_min: int = 500_000_000_000,
     cap_max: int = 1_000_000_000_000,
     top_n: int = 10,
+    per_max: Optional[float] = None,
+    pbr_max: Optional[float] = None,
+    div_policy: str = "zero",
 ):
     normalized_market = normalize_market(market)
     base_date = normalize_date(date)
+    normalized_div_policy = div_policy.strip().lower()
+    if normalized_div_policy not in VALID_DIV_POLICIES:
+        raise ValueError("div_policy must be one of: zero, exclude")
+
+    cache_key = (
+        normalized_market,
+        base_date.strftime("%Y%m%d"),
+        cap_min,
+        cap_max,
+        top_n,
+        per_max,
+        pbr_max,
+        normalized_div_policy,
+    )
+    if cache_key in _QUERY_CACHE:
+        cached_df, cached_used_date, cached_stats, cached_logs = _QUERY_CACHE[cache_key]
+        stats = dict(cached_stats)
+        stats["cache_hit"] = 1
+        return cached_df.copy(), cached_used_date, stats, list(cached_logs)
+
+    backtrack_logs: list[str] = []
 
     market_cap_df, fundamental_df, used_date = get_market_data_with_fallback(
         market=normalized_market,
         base_date=base_date,
+        backtrack_logs=backtrack_logs,
     )
 
     result_df = market_cap_df.join(fundamental_df, how="inner")
@@ -96,6 +146,16 @@ def get_tatsuro_small_mid_value_top10(
         & (result_df["시가총액"] >= cap_min)
         & (result_df["시가총액"] <= cap_max)
     ]
+
+    if per_max is not None:
+        result_df = result_df[result_df["PER"] <= per_max]
+
+    if pbr_max is not None:
+        result_df = result_df[result_df["PBR"] <= pbr_max]
+
+    if normalized_div_policy == "exclude":
+        result_df = result_df[result_df["DIV"].notna()]
+
     filtered_count = len(result_df)
 
     result_df = add_ticker_names(result_df)
@@ -119,6 +179,9 @@ def get_tatsuro_small_mid_value_top10(
         "total": total_count,
         "filtered": filtered_count,
         "final": len(display_df),
+        "cache_hit": 0,
     }
 
-    return display_df, used_date, stats
+    _QUERY_CACHE[cache_key] = (display_df.copy(), used_date, dict(stats), list(backtrack_logs))
+
+    return display_df, used_date, stats, backtrack_logs

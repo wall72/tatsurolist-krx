@@ -45,20 +45,24 @@ class TatsuroScoreTests(unittest.TestCase):
 
 
 class FilterConditionTests(unittest.TestCase):
+    def setUp(self):
+        svc._QUERY_CACHE.clear()
+        svc._TICKER_NAME_CACHE.clear()
+
     @patch("krx_value_service.add_ticker_names")
     @patch("krx_value_service.get_market_data_with_fallback")
-    def test_filter_conditions_for_per_pbr_and_market_cap(self, mock_get_market_data, mock_add_ticker_names):
+    def test_filter_conditions_for_per_pbr_market_cap_and_per_pbr_caps(self, mock_get_market_data, mock_add_ticker_names):
         idx = ["A", "B", "C", "D", "E"]
         market_cap_df = pd.DataFrame(
             {
-                "시가총액": [600_000_000_000, 600_000_000_000, 300_000_000_000, 600_000_000_000, 1_200_000_000_000]
+                "시가총액": [600_000_000_000, 600_000_000_000, 700_000_000_000, 600_000_000_000, 900_000_000_000]
             },
             index=idx,
         )
         fundamental_df = pd.DataFrame(
             {
-                "PER": [10.0, 0.0, 8.0, 9.0, 7.0],
-                "PBR": [1.0, 1.0, 1.0, -1.0, 1.0],
+                "PER": [10.0, 16.0, 8.0, 9.0, 7.0],
+                "PBR": [1.0, 1.0, 4.0, -1.0, 1.0],
                 "DIV": [2.0, 2.0, 2.0, 2.0, 2.0],
             },
             index=idx,
@@ -73,17 +77,70 @@ class FilterConditionTests(unittest.TestCase):
 
         mock_add_ticker_names.side_effect = add_names
 
-        result_df, used_date, stats = svc.get_tatsuro_small_mid_value_top10(
+        result_df, used_date, stats, logs = svc.get_tatsuro_small_mid_value_top10(
             market="KOSPI",
             date="2026-02-19",
             cap_min=500_000_000_000,
             cap_max=1_000_000_000_000,
             top_n=10,
+            per_max=12.0,
+            pbr_max=2.0,
         )
 
         self.assertEqual(used_date, "20260219")
-        self.assertEqual(stats, {"total": 5, "filtered": 1, "final": 1})
-        self.assertEqual(result_df.iloc[0]["종목명"], "name-A")
+        self.assertEqual(stats, {"total": 5, "filtered": 2, "final": 2, "cache_hit": 0})
+        self.assertEqual(result_df.iloc[0]["종목명"], "name-E")
+        self.assertIsInstance(logs, list)
+
+    @patch("krx_value_service.add_ticker_names")
+    @patch("krx_value_service.get_market_data_with_fallback")
+    def test_div_policy_exclude_filters_out_nan_div(self, mock_get_market_data, mock_add_ticker_names):
+        idx = ["A", "B"]
+        market_cap_df = pd.DataFrame({"시가총액": [600_000_000_000, 650_000_000_000]}, index=idx)
+        fundamental_df = pd.DataFrame(
+            {
+                "PER": [10.0, 8.0],
+                "PBR": [1.0, 1.0],
+                "DIV": [float("nan"), 2.0],
+            },
+            index=idx,
+        )
+        mock_get_market_data.return_value = (market_cap_df, fundamental_df, "20260219")
+
+        def add_names(df: pd.DataFrame) -> pd.DataFrame:
+            out = df.copy()
+            out["종목명"] = [f"name-{ticker}" for ticker in out.index]
+            return out
+
+        mock_add_ticker_names.side_effect = add_names
+
+        result_df, _, stats, _ = svc.get_tatsuro_small_mid_value_top10(div_policy="exclude")
+
+        self.assertEqual(stats["filtered"], 1)
+        self.assertEqual(stats["final"], 1)
+        self.assertEqual(result_df.iloc[0]["종목명"], "name-B")
+
+    @patch("krx_value_service.add_ticker_names")
+    @patch("krx_value_service.get_market_data_with_fallback")
+    def test_same_params_use_query_cache(self, mock_get_market_data, mock_add_ticker_names):
+        idx = ["A"]
+        market_cap_df = pd.DataFrame({"시가총액": [600_000_000_000]}, index=idx)
+        fundamental_df = pd.DataFrame({"PER": [10.0], "PBR": [1.0], "DIV": [2.0]}, index=idx)
+        mock_get_market_data.return_value = (market_cap_df, fundamental_df, "20260219")
+
+        def add_names(df: pd.DataFrame) -> pd.DataFrame:
+            out = df.copy()
+            out["종목명"] = ["name-A"]
+            return out
+
+        mock_add_ticker_names.side_effect = add_names
+
+        _, _, stats1, _ = svc.get_tatsuro_small_mid_value_top10(date="2026-02-19")
+        _, _, stats2, _ = svc.get_tatsuro_small_mid_value_top10(date="2026-02-19")
+
+        self.assertEqual(stats1["cache_hit"], 0)
+        self.assertEqual(stats2["cache_hit"], 1)
+        self.assertEqual(mock_get_market_data.call_count, 1)
 
 
 if __name__ == "__main__":
