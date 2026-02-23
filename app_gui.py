@@ -3,10 +3,13 @@ from __future__ import annotations
 import threading
 import tkinter as tk
 from datetime import datetime
+from time import perf_counter
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from krx_value_service import get_tatsuro_small_mid_value_top10
+
+DIV_POLICIES = ("zero", "exclude")
 
 COLUMNS = (
     "종목명",
@@ -22,6 +25,8 @@ COLUMNS = (
 DEFAULT_CAP_MIN_EOK = 5000
 DEFAULT_CAP_MAX_EOK = 10000
 DEFAULT_TOP_N = 10
+DEFAULT_PER_MAX = ""
+DEFAULT_PBR_MAX = ""
 
 
 class KrxValueApp(tk.Tk):
@@ -37,10 +42,14 @@ class KrxValueApp(tk.Tk):
         self.cap_min_var = tk.StringVar(value=str(DEFAULT_CAP_MIN_EOK))
         self.cap_max_var = tk.StringVar(value=str(DEFAULT_CAP_MAX_EOK))
         self.top_n_var = tk.StringVar(value=str(DEFAULT_TOP_N))
+        self.per_max_var = tk.StringVar(value=DEFAULT_PER_MAX)
+        self.pbr_max_var = tk.StringVar(value=DEFAULT_PBR_MAX)
+        self.div_policy_var = tk.StringVar(value="zero")
         self.result_header_var = tk.StringVar(value="결과 헤더: 시장/기준일 정보가 여기에 표시됩니다.")
 
         self._latest_result_df = None
         self._last_used_date = ""
+        self._fetch_started_at = 0.0
         self._build_ui()
 
     def _build_ui(self):
@@ -93,6 +102,24 @@ class KrxValueApp(tk.Tk):
         self.reset_button = ttk.Button(top_frame, text="기본값 복원", command=self.reset_defaults)
         self.reset_button.grid(row=2, column=5, sticky="e", padx=(12, 0), pady=(10, 0))
 
+        ttk.Label(top_frame, text="PER 상한(선택)").grid(row=3, column=0, sticky="w", pady=(8, 0))
+        self.per_max_entry = ttk.Entry(top_frame, textvariable=self.per_max_var, width=12)
+        self.per_max_entry.grid(row=3, column=1, sticky="w", padx=(0, 12), pady=(8, 0))
+
+        ttk.Label(top_frame, text="PBR 상한(선택)").grid(row=3, column=2, sticky="w", pady=(8, 0))
+        self.pbr_max_entry = ttk.Entry(top_frame, textvariable=self.pbr_max_var, width=12)
+        self.pbr_max_entry.grid(row=3, column=3, sticky="w", padx=(0, 8), pady=(8, 0))
+
+        ttk.Label(top_frame, text="DIV 결측 정책").grid(row=3, column=4, sticky="w", pady=(8, 0))
+        self.div_policy_combo = ttk.Combobox(
+            top_frame,
+            textvariable=self.div_policy_var,
+            values=DIV_POLICIES,
+            state="readonly",
+            width=10,
+        )
+        self.div_policy_combo.grid(row=3, column=4, sticky="e", padx=(0, 60), pady=(8, 0))
+
         top_frame.columnconfigure(4, weight=1)
 
         header_label = ttk.Label(self, textvariable=self.result_header_var, padding=(12, 0, 12, 6))
@@ -121,6 +148,9 @@ class KrxValueApp(tk.Tk):
         self.cap_min_var.set(str(DEFAULT_CAP_MIN_EOK))
         self.cap_max_var.set(str(DEFAULT_CAP_MAX_EOK))
         self.top_n_var.set(str(DEFAULT_TOP_N))
+        self.per_max_var.set(DEFAULT_PER_MAX)
+        self.pbr_max_var.set(DEFAULT_PBR_MAX)
+        self.div_policy_var.set("zero")
         self.status_var.set("기본 파라미터로 복원했습니다.")
 
     def _validate_inputs(self):
@@ -138,7 +168,29 @@ class KrxValueApp(tk.Tk):
         if not 1 <= top_n <= 100:
             raise ValueError("Top N은 1~100 범위로 입력해 주세요.")
 
-        return cap_min_eok * 100_000_000, cap_max_eok * 100_000_000, top_n
+        per_raw = self.per_max_var.get().strip()
+        pbr_raw = self.pbr_max_var.get().strip()
+        per_max = None
+        pbr_max = None
+
+        if per_raw:
+            per_max = float(per_raw)
+            if per_max <= 0:
+                raise ValueError("PER 상한은 0보다 커야 합니다.")
+
+        if pbr_raw:
+            pbr_max = float(pbr_raw)
+            if pbr_max <= 0:
+                raise ValueError("PBR 상한은 0보다 커야 합니다.")
+
+        return (
+            cap_min_eok * 100_000_000,
+            cap_max_eok * 100_000_000,
+            top_n,
+            per_max,
+            pbr_max,
+            self.div_policy_var.get().strip().lower(),
+        )
 
     def fetch_data(self):
         try:
@@ -150,32 +202,38 @@ class KrxValueApp(tk.Tk):
         self.fetch_button.config(state="disabled")
         self.reset_button.config(state="disabled")
         self.save_button.config(state="disabled")
+        self._fetch_started_at = perf_counter()
         self.status_var.set("데이터 조회 중...")
         threading.Thread(target=self._fetch_data_worker, daemon=True).start()
 
     def _fetch_data_worker(self):
         try:
-            cap_min, cap_max, top_n = self._query_params
-            df, used_date, stats = get_tatsuro_small_mid_value_top10(
+            cap_min, cap_max, top_n, per_max, pbr_max, div_policy = self._query_params
+            df, used_date, stats, logs = get_tatsuro_small_mid_value_top10(
                 market=self.market_var.get(),
                 date=self.date_var.get() or None,
                 cap_min=cap_min,
                 cap_max=cap_max,
                 top_n=top_n,
+                per_max=per_max,
+                pbr_max=pbr_max,
+                div_policy=div_policy,
             )
-            self.after(0, self._render_table, df, used_date, stats)
+            elapsed = perf_counter() - self._fetch_started_at
+            self.after(0, self._render_table, df, used_date, stats, logs, elapsed)
         except Exception as exc:
             self.after(0, self._show_error, str(exc))
 
-    def _render_table(self, df, used_date: str, stats: dict[str, int]):
+    def _render_table(self, df, used_date: str, stats: dict[str, int], logs: list[str], elapsed_sec: float):
         self.tree.delete(*self.tree.get_children())
         self._latest_result_df = df.copy()
         self._last_used_date = used_date
         self.result_header_var.set(f"결과 헤더 | 시장: {self.market_var.get()} | 기준일: {used_date}")
 
         if df.empty:
+            cache_text = "캐시사용" if stats.get("cache_hit") else "신규조회"
             self.status_var.set(
-                f"조건 통과 종목이 없습니다 | 전체: {stats['total']} | 조건통과: {stats['filtered']} | 최종: 0"
+                f"조건 통과 종목이 없습니다 | 전체: {stats['total']} | 조건통과: {stats['filtered']} | 최종: 0 | {cache_text} | {elapsed_sec:.2f}s"
             )
             self.fetch_button.config(state="normal")
             self.reset_button.config(state="normal")
@@ -199,8 +257,10 @@ class KrxValueApp(tk.Tk):
                 ),
             )
 
+        cache_text = "캐시사용" if stats.get("cache_hit") else "신규조회"
+        backtrack_summary = logs[-1] if logs else "백트래킹 로그 없음"
         self.status_var.set(
-            f"조회 완료 | 전체: {stats['total']} | 조건통과: {stats['filtered']} | 최종: {stats['final']}"
+            f"조회 완료 | 전체: {stats['total']} | 조건통과: {stats['filtered']} | 최종: {stats['final']} | {cache_text} | {elapsed_sec:.2f}s | {backtrack_summary}"
         )
         self.fetch_button.config(state="normal")
         self.reset_button.config(state="normal")

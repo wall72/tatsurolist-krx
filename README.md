@@ -10,11 +10,14 @@ KRX 데이터(`pykrx`)를 사용해 Tatsuro 방식의 중소형 가치주를 선
 - 파라미터 입력
   - 시가총액 하한/상한 입력 (`cap_min`, `cap_max`, 기본 `5,000억 ~ 1조`)
   - Top N 입력 (기본 `10`, 허용 범위 `1~100`)
+  - 극단치 방어: `PER 상한`, `PBR 상한`(선택 입력)
+  - DIV 결측 정책 선택: `zero`(0 처리) 또는 `exclude`(결측 종목 제외)
   - `기본값 복원` 버튼으로 파라미터 초기화
 - 입력값 유효성 검사
   - 시총/Top N 숫자 여부 확인
   - 시총 하한/상한 범위 검증 (하한 ≤ 상한, 0 이상)
 - 휴장일 자동 처리: 최근 영업일로 최대 14일 백트래킹
+- 백트래킹 로그: 상태바에 마지막 백트래킹 결과 요약 표시
 - 선별 조건
   - `PER > 0`
   - `PBR > 0`
@@ -25,11 +28,15 @@ KRX 데이터(`pykrx`)를 사용해 Tatsuro 방식의 중소형 가치주를 선
   - `PER 기여`, `PBR 기여`, `DIV 기여`를 별도 표시
 - 조회 통계
   - 하단 상태바에 `전체/조건통과/최종` 건수 표시
+  - 조회 소요 시간(초) 및 캐시 사용 여부(`신규조회`/`캐시사용`) 표시
 - 결과 헤더
   - 현재 표시 중인 결과의 `시장`/`기준일`을 고정 표시
 - CSV 저장
   - `CSV 저장` 버튼으로 결과 내보내기
   - 기본 파일명: `market_date_timestamp.csv`
+- 성능 개선
+  - 티커명 조회 메모리 캐시 적용
+  - 동일 파라미터 재조회 시 결과 재사용 캐시 적용
 
 ## 프로젝트 구조
 
@@ -63,11 +70,11 @@ python app_gui.py
    - 예: `20260219` 또는 `2026-02-19`
    - 비워두면 Today
 3. `목록 조회` 클릭
-4. 필요 시 시가총액 하한/상한, Top N을 조정
+4. 필요 시 시가총액 하한/상한, Top N, PER/PBR 상한, DIV 결측 정책을 조정
 5. `기본값 복원`으로 파라미터를 기본값으로 되돌릴 수 있음
 
 조회 완료 후 하단 상태바에 실제 사용된 기준일이 표시됩니다.
-상태바에는 필터링 통계(전체/조건통과/최종)도 함께 표시됩니다.
+상태바에는 필터링 통계(전체/조건통과/최종), 캐시 사용 여부, 조회 시간, 마지막 백트래킹 요약이 함께 표시됩니다.
 
 `CSV 저장` 버튼으로 현재 조회 결과를 저장할 수 있으며, 저장 성공/실패 메시지가 표시됩니다.
 
@@ -77,13 +84,17 @@ python app_gui.py
 from krx_value_service import get_tatsuro_small_mid_value_top10
 
 # KOSDAQ, 특정 날짜 기준
-result_df, used_date, stats = get_tatsuro_small_mid_value_top10(
+result_df, used_date, stats, logs = get_tatsuro_small_mid_value_top10(
     market="KOSDAQ",
     date="2026-02-19",
+    per_max=15.0,
+    pbr_max=2.0,
+    div_policy="exclude",
 )
 
 print(used_date)
 print(stats)
+print(logs[-1] if logs else "no logs")
 print(result_df)
 ```
 
@@ -101,7 +112,9 @@ python -m unittest -v
 - `normalize_market`
 - `normalize_date`
 - `get_tatsuro_score`
-- 필터 조건(PER/PBR/시가총액)
+- 필터 조건(PER/PBR/시가총액/상한)
+- DIV 결측 정책(exclude)
+- 동일 파라미터 재조회 캐시
 
 ## PyInstaller 배포 (Windows)
 
