@@ -37,11 +37,18 @@ KRX 데이터(`pykrx`)를 사용해 Tatsuro 방식의 중소형 가치주를 선
 - 성능 개선
   - 티커명 조회 메모리 캐시 적용
   - 동일 파라미터 재조회 시 결과 재사용 캐시 적용
+- 백테스트/리포트
+  - 월간 리밸런싱 백테스트 실행 스크립트 (`backtest_cli.py`)
+  - GUI에서 백테스트 실행/요약 확인 및 리포트 저장 지원
+  - 벤치마크 대비 성과 요약 (누적수익률, MDD)
+  - KOSPI/KOSDAQ 시장별 비교 리포트 생성
 
 ## 프로젝트 구조
 
 - `app_gui.py`: tkinter 기반 Windows GUI 앱
 - `krx_value_service.py`: 데이터 조회/필터/점수 계산 서비스 로직
+- `krx_backtest.py`: 월간 리밸런싱 백테스트 및 리포트 생성 로직
+- `backtest_cli.py`: 백테스트 실행 CLI
 - `test_pykrx.py`: 초기 콘솔 기반 실험 스크립트
 - `requirements.txt`: 의존성 목록
 
@@ -72,6 +79,8 @@ python app_gui.py
 3. `목록 조회` 클릭
 4. 필요 시 시가총액 하한/상한, Top N, PER/PBR 상한, DIV 결측 정책을 조정
 5. `기본값 복원`으로 파라미터를 기본값으로 되돌릴 수 있음
+6. 백테스트 시작일/종료일 및 범위(`all` 또는 `selected`)를 지정 후 `백테스트 실행`
+7. 하단 `백테스트 요약` 표에서 시장별 누적수익률/MDD 확인 후 `리포트 저장`
 
 조회 완료 후 하단 상태바에 실제 사용된 기준일이 표시됩니다.
 상태바에는 필터링 통계(전체/조건통과/최종), 캐시 사용 여부, 조회 시간, 마지막 백트래킹 요약이 함께 표시됩니다.
@@ -115,6 +124,24 @@ python -m unittest -v
 - 필터 조건(PER/PBR/시가총액/상한)
 - DIV 결측 정책(exclude)
 - 동일 파라미터 재조회 캐시
+- 백테스트 월말 리밸런싱 날짜 생성
+- 백테스트 요약(누적수익률/MDD)
+- 백테스트 리포트 파일 생성
+
+## 백테스트 실행
+
+아래 예시로 월간 리밸런싱 백테스트를 실행할 수 있습니다.
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python backtest_cli.py --start-date 2023-01-01 --end-date 2025-12-31 --top-n 10 --output-dir reports
+```
+
+생성 결과:
+- `reports/backtest_summary.csv` (KOSPI/KOSDAQ 비교 요약)
+- `reports/backtest_kospi_monthly.csv`
+- `reports/backtest_kosdaq_monthly.csv`
+- `reports/backtest_report.md`
 
 ## PyInstaller 배포 (Windows)
 
