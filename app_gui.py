@@ -3,11 +3,13 @@ from __future__ import annotations
 import threading
 import tkinter as tk
 from datetime import datetime
+import logging
 from pathlib import Path
 from time import perf_counter
 from tkinter import filedialog, messagebox, ttk
 
 from krx_backtest import BacktestConfig, create_market_comparison_report, write_backtest_report
+from app_runtime import CONFIG_PATH, LOG_PATH, load_config, save_config, setup_file_logging
 from krx_value_service import get_tatsuro_small_mid_value_top10
 
 DIV_POLICIES = ("zero", "exclude")
@@ -43,24 +45,35 @@ DEFAULT_PBR_MAX = ""
 class KrxValueApp(tk.Tk):
     def __init__(self):
         super().__init__()
+        self._log_path = setup_file_logging()
+        self._logger = logging.getLogger(__name__)
+
+        try:
+            self._config = load_config()
+        except Exception as exc:
+            self._config = {}
+            self._logger.exception("설정값 로드 실패: %s", exc)
+
         self.title("Tatsuro KRX 중소형 가치주")
         self.geometry("1220x760")
         self.minsize(1040, 620)
 
         today = datetime.now()
+        default_start_date = self._config.get("backtest_start_date") or f"{today.year - 1}-01-01"
+        default_end_date = self._config.get("backtest_end_date") or today.strftime("%Y-%m-%d")
         self.status_var = tk.StringVar(value="시장/날짜를 선택하고 조회 버튼을 누르세요.")
-        self.market_var = tk.StringVar(value="KOSPI")
-        self.date_var = tk.StringVar(value="")
-        self.cap_min_var = tk.StringVar(value=str(DEFAULT_CAP_MIN_EOK))
-        self.cap_max_var = tk.StringVar(value=str(DEFAULT_CAP_MAX_EOK))
-        self.top_n_var = tk.StringVar(value=str(DEFAULT_TOP_N))
-        self.per_max_var = tk.StringVar(value=DEFAULT_PER_MAX)
-        self.pbr_max_var = tk.StringVar(value=DEFAULT_PBR_MAX)
-        self.div_policy_var = tk.StringVar(value="zero")
+        self.market_var = tk.StringVar(value=str(self._config.get("market", "KOSPI")))
+        self.date_var = tk.StringVar(value=str(self._config.get("date", "")))
+        self.cap_min_var = tk.StringVar(value=str(self._config.get("cap_min_eok", DEFAULT_CAP_MIN_EOK)))
+        self.cap_max_var = tk.StringVar(value=str(self._config.get("cap_max_eok", DEFAULT_CAP_MAX_EOK)))
+        self.top_n_var = tk.StringVar(value=str(self._config.get("top_n", DEFAULT_TOP_N)))
+        self.per_max_var = tk.StringVar(value=str(self._config.get("per_max", DEFAULT_PER_MAX)))
+        self.pbr_max_var = tk.StringVar(value=str(self._config.get("pbr_max", DEFAULT_PBR_MAX)))
+        self.div_policy_var = tk.StringVar(value=str(self._config.get("div_policy", "zero")))
         self.result_header_var = tk.StringVar(value="결과 헤더: 시장/기준일 정보가 여기에 표시됩니다.")
-        self.backtest_start_var = tk.StringVar(value=f"{today.year - 1}-01-01")
-        self.backtest_end_var = tk.StringVar(value=today.strftime("%Y-%m-%d"))
-        self.backtest_scope_var = tk.StringVar(value="all")
+        self.backtest_start_var = tk.StringVar(value=default_start_date)
+        self.backtest_end_var = tk.StringVar(value=default_end_date)
+        self.backtest_scope_var = tk.StringVar(value=str(self._config.get("backtest_scope", "all")))
 
         self._latest_result_df = None
         self._last_used_date = ""
@@ -69,6 +82,8 @@ class KrxValueApp(tk.Tk):
         self._latest_backtest_summary_df = None
         self._latest_backtest_market_results: dict[str, object] = {}
         self._build_ui()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._logger.info("앱 시작 | config=%s | log=%s", CONFIG_PATH, LOG_PATH)
 
     def _build_ui(self):
         top_frame = ttk.Frame(self, padding=12)
@@ -208,6 +223,7 @@ class KrxValueApp(tk.Tk):
         self.pbr_max_var.set(DEFAULT_PBR_MAX)
         self.div_policy_var.set("zero")
         self.status_var.set("기본 파라미터로 복원했습니다.")
+        self._save_current_config()
 
     def _validate_inputs(self):
         try:
@@ -269,6 +285,7 @@ class KrxValueApp(tk.Tk):
         self.save_button.config(state="disabled")
         self._fetch_started_at = perf_counter()
         self.status_var.set("데이터 조회 중...")
+        self._logger.info("목록 조회 시작 | market=%s | date=%s", self.market_var.get(), self.date_var.get())
         threading.Thread(target=self._fetch_data_worker, daemon=True).start()
 
     def _fetch_data_worker(self):
@@ -327,6 +344,8 @@ class KrxValueApp(tk.Tk):
         self.status_var.set(
             f"조회 완료 | 전체: {stats['total']} | 조건통과: {stats['filtered']} | 최종: {stats['final']} | {cache_text} | {elapsed_sec:.2f}s | {backtrack_summary}"
         )
+        self._save_current_config()
+        self._logger.info("목록 조회 완료 | final=%s | cache=%s | used_date=%s", stats["final"], cache_text, used_date)
         self.fetch_button.config(state="normal")
         self.reset_button.config(state="normal")
         self.save_button.config(state="normal")
@@ -356,6 +375,12 @@ class KrxValueApp(tk.Tk):
         self.backtest_save_button.config(state="disabled")
         self._backtest_started_at = perf_counter()
         self.status_var.set("백테스트 실행 중...")
+        self._logger.info(
+            "백테스트 시작 | scope=%s | start=%s | end=%s",
+            self.backtest_scope_var.get(),
+            self.backtest_start_var.get(),
+            self.backtest_end_var.get(),
+        )
         threading.Thread(target=self._run_backtest_worker, args=(markets,), daemon=True).start()
 
     def _run_backtest_worker(self, markets: tuple[str, ...]):
@@ -389,6 +414,8 @@ class KrxValueApp(tk.Tk):
         self.backtest_button.config(state="normal")
         self.backtest_save_button.config(state="normal")
         self.status_var.set(f"백테스트 완료 | 시장 수: {len(summary_df)} | 소요: {elapsed_sec:.2f}s")
+        self._save_current_config()
+        self._logger.info("백테스트 완료 | markets=%s", len(summary_df))
 
     def save_backtest_report(self):
         if self._latest_backtest_summary_df is None or self._latest_backtest_summary_df.empty:
@@ -434,6 +461,7 @@ class KrxValueApp(tk.Tk):
         try:
             self._latest_result_df.to_csv(file_path, index=False, encoding="utf-8-sig")
             self.status_var.set(f"CSV 저장 완료: {Path(file_path).name}")
+            self._logger.info("CSV 저장 완료 | file=%s", file_path)
             messagebox.showinfo("저장 완료", f"CSV 파일을 저장했습니다.\n\n{file_path}")
         except Exception as exc:
             self.status_var.set("CSV 저장 실패")
@@ -445,12 +473,41 @@ class KrxValueApp(tk.Tk):
         self.reset_button.config(state="normal")
         self.save_button.config(state="disabled")
         messagebox.showerror("오류", f"데이터 조회 중 오류가 발생했습니다.\n\n{message}")
+        self._logger.error("조회 실패: %s", message)
 
     def _show_backtest_error(self, message: str):
         self.status_var.set("백테스트 실패")
         self.backtest_button.config(state="normal")
         self.backtest_save_button.config(state="disabled")
         messagebox.showerror("오류", f"백테스트 실행 중 오류가 발생했습니다.\n\n{message}")
+        self._logger.error("백테스트 실패: %s", message)
+
+    def _build_config_payload(self) -> dict[str, object]:
+        return {
+            "market": self.market_var.get().strip(),
+            "date": self.date_var.get().strip(),
+            "cap_min_eok": int(self.cap_min_var.get().strip() or DEFAULT_CAP_MIN_EOK),
+            "cap_max_eok": int(self.cap_max_var.get().strip() or DEFAULT_CAP_MAX_EOK),
+            "top_n": int(self.top_n_var.get().strip() or DEFAULT_TOP_N),
+            "per_max": self.per_max_var.get().strip(),
+            "pbr_max": self.pbr_max_var.get().strip(),
+            "div_policy": self.div_policy_var.get().strip(),
+            "backtest_start_date": self.backtest_start_var.get().strip(),
+            "backtest_end_date": self.backtest_end_var.get().strip(),
+            "backtest_scope": self.backtest_scope_var.get().strip(),
+        }
+
+    def _save_current_config(self):
+        try:
+            config_path = save_config(self._build_config_payload())
+            self._logger.info("설정값 저장 완료 | path=%s", config_path)
+        except Exception as exc:
+            self._logger.exception("설정값 저장 실패: %s", exc)
+
+    def _on_close(self):
+        self._save_current_config()
+        self._logger.info("앱 종료")
+        self.destroy()
 
 
 if __name__ == "__main__":
